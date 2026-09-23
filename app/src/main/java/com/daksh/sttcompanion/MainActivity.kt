@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.Center
                     ) {
                         Text(
-                            text = "Companion Server",
+                            text = "Simple Time Tracker\nCompanion App",
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -64,20 +64,14 @@ class MainActivity : ComponentActivity() {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
-                                Surface(
-                                    color = MaterialTheme.colorScheme.primaryContainer,
-                                    shape = RoundedCornerShape(12.dp),
+                                Text(
+                                    text = authManager.token,
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.padding(bottom = 24.dp)
-                                ) {
-                                    Text(
-                                        text = authManager.token,
-                                        style = MaterialTheme.typography.headlineSmall,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                                    )
-                                }
+                                )
                                 
                                 Text(
                                     text = "Dashboard URL",
@@ -112,7 +106,11 @@ class MainActivity : ComponentActivity() {
                                     isRunning = false
                                 } else {
                                     val intent = Intent(this@MainActivity, ServerService::class.java)
-                                    startForegroundService(intent)
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                        startForegroundService(intent)
+                                    } else {
+                                        startService(intent)
+                                    }
                                     isRunning = true
                                 }
                             },

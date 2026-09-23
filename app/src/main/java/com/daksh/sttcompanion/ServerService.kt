@@ -22,6 +22,7 @@ import io.ktor.utils.io.writeStringUtf8
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 class ServerService : Service() {
 
@@ -394,7 +395,7 @@ class ServerService : Service() {
     }
 
     override fun onDestroy() {
-        server?.stop(1000, 2000)
+        CoroutineScope(Dispatchers.IO).launch { server?.stop(1000, 2000) }
         serviceJob.cancel()
         super.onDestroy()
     }
