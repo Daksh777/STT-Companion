@@ -395,6 +395,7 @@ class ServerService : Service() {
     }
 
     override fun onDestroy() {
+        sttManager.stopListeningEvents()
         CoroutineScope(Dispatchers.IO).launch { server?.stop(1000, 2000) }
         serviceJob.cancel()
         super.onDestroy()

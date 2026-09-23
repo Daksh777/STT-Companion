@@ -29,7 +29,9 @@ class SttBroadcastManager(private val context: Context) {
     private val TARGET_CLASS = "com.example.util.simpletimetracker.feature_notification.recevier.NotificationReceiver"
     
     val updateFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    
     private var isListeningEvents = false
+    private var eventReceiver: BroadcastReceiver? = null
 
     fun startListeningEvents() {
         if (isListeningEvents) return
@@ -38,13 +40,23 @@ class SttBroadcastManager(private val context: Context) {
             addAction("com.razeeman.util.simpletimetracker.EVENT_STOPPED_ACTIVITY")
             addAction("com.razeeman.util.simpletimetracker.EVENT_COMPLETED_GOAL")
         }
-        val eventReceiver = object : BroadcastReceiver() {
+        eventReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 updateFlow.tryEmit(Unit)
             }
         }
-        ContextCompat.registerReceiver(context, eventReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
+        ContextCompat.registerReceiver(context, eventReceiver!!, filter, ContextCompat.RECEIVER_EXPORTED)
         isListeningEvents = true
+    }
+
+    fun stopListeningEvents() {
+        if (!isListeningEvents) return
+        try {
+            eventReceiver?.let { context.unregisterReceiver(it) }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        isListeningEvents = false
     }
 
     suspend fun getActivities(): String? {
