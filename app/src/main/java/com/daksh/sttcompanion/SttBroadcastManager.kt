@@ -26,7 +26,6 @@ class SttBroadcastManager(private val context: Context) {
     private val EXTRA_ACTIVITY_NAME = "extra_activity_name"
     
     private val TARGET_PACKAGE = "com.razeeman.util.simpletimetracker.debug"
-    private val TARGET_CLASS = "com.example.util.simpletimetracker.feature_notification.recevier.NotificationReceiver"
     
     val updateFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     
@@ -70,7 +69,7 @@ class SttBroadcastManager(private val context: Context) {
         }
         ContextCompat.registerReceiver(context, receiver, IntentFilter(ACTION_RESPONSE_ACTIVITIES), ContextCompat.RECEIVER_EXPORTED)
         val queryIntent = Intent(ACTION_QUERY_ACTIVITIES).apply {
-            component = ComponentName(TARGET_PACKAGE, TARGET_CLASS)
+            setPackage(TARGET_PACKAGE)
             putExtra(EXTRA_ANSWER_TYPE, "json")
         }
         context.sendBroadcast(queryIntent)
@@ -95,7 +94,7 @@ class SttBroadcastManager(private val context: Context) {
         }
         ContextCompat.registerReceiver(context, receiver, IntentFilter(ACTION_RESPONSE_RUNNING), ContextCompat.RECEIVER_EXPORTED)
         val queryIntent = Intent(ACTION_QUERY_RUNNING).apply {
-            component = ComponentName(TARGET_PACKAGE, TARGET_CLASS)
+            setPackage(TARGET_PACKAGE)
             putExtra(EXTRA_ANSWER_TYPE, "json")
         }
         context.sendBroadcast(queryIntent)
@@ -111,7 +110,7 @@ class SttBroadcastManager(private val context: Context) {
 
     fun startActivity(name: String) {
         val intent = Intent(ACTION_START_ACTIVITY).apply {
-            component = ComponentName(TARGET_PACKAGE, TARGET_CLASS)
+            setPackage(TARGET_PACKAGE)
             putExtra(EXTRA_ACTIVITY_NAME, name)
         }
         context.sendBroadcast(intent)
@@ -119,7 +118,7 @@ class SttBroadcastManager(private val context: Context) {
 
     fun stopActivity(name: String) {
         val intent = Intent(ACTION_STOP_ACTIVITY).apply {
-            component = ComponentName(TARGET_PACKAGE, TARGET_CLASS)
+            setPackage(TARGET_PACKAGE)
             putExtra(EXTRA_ACTIVITY_NAME, name)
         }
         context.sendBroadcast(intent)
