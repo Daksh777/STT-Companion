@@ -109,6 +109,29 @@ class ServerService : Service() {
                     }
                 }
                 
+                get("/api/records") {
+                    val shift = call.request.queryParameters["shift"]?.toIntOrNull() ?: 0
+                    val json = sttManager.getRecords(shift)
+                    if (json != null) {
+                        call.respondText(json, ContentType.Application.Json)
+                    } else {
+                        call.respond(HttpStatusCode.ServiceUnavailable, "Could not reach STT")
+                    }
+                }
+
+                get("/api/statistics") {
+                    val shift = call.request.queryParameters["shift"]?.toIntOrNull() ?: 0
+                    val filterType = call.request.queryParameters["filter"]
+                        ?.takeIf { it in setOf("ACTIVITY", "CATEGORY", "RECORD_TAG") }
+                        ?: "ACTIVITY"
+                    val json = sttManager.getStatistics(shift, filterType)
+                    if (json != null) {
+                        call.respondText(json, ContentType.Application.Json)
+                    } else {
+                        call.respond(HttpStatusCode.ServiceUnavailable, "Could not reach STT")
+                    }
+                }
+
                 post("/api/start") {
                     val activityName = call.request.queryParameters["name"]
                     if (activityName != null) {
@@ -227,6 +250,32 @@ class ServerService : Service() {
         
         #authSection, #appSection { display: none; }
         
+        .tabs { display: flex; gap: 8px; margin-bottom: 24px; }
+        .tab { flex: 1; background: var(--md-surface-container); color: var(--md-on-bg); padding: 12px 0; }
+        .tab.active { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+
+        .date-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .date-nav button { width: 44px; height: 44px; padding: 0; font-size: 20px; }
+        .date-label { font-size: 18px; font-weight: 500; }
+        .filter-select { width: 100%; padding: 12px; margin-bottom: 16px; border-radius: 16px; border: 1px solid var(--md-outline-variant); background: var(--md-surface); color: var(--md-on-bg); font-size: 14px; }
+
+        .loading { text-align: center; padding: 32px 0; color: var(--md-outline); }
+
+        .donut-chart { width: 220px; height: 220px; border-radius: 50%; margin: 8px auto 24px; position: relative; }
+        .donut-inner { position: absolute; inset: 40px; border-radius: 50%; background: var(--md-surface-container); }
+
+        .stat-row { display: flex; align-items: center; gap: 12px; padding: 16px; border-radius: 16px; margin-bottom: 10px; color: #fff; font-weight: 500; font-size: 16px; }
+        .stat-row .stat-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .stat-row .stat-percent { min-width: 48px; text-align: right; padding-left: 12px; border-left: 1px solid rgba(0,0,0,0.2); }
+        .stat-total { display: flex; justify-content: space-between; padding: 16px; border-radius: 16px; background: var(--md-outline-variant); font-weight: 500; }
+
+        .record-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 16px; margin-bottom: 8px; color: #fff; }
+        .record-row.untracked { background: var(--md-surface) !important; color: var(--md-outline); border: 1px dashed var(--md-outline-variant); }
+        .record-main { flex: 1; min-width: 0; }
+        .record-name { font-weight: 500; font-size: 16px; }
+        .record-sub { font-size: 13px; opacity: 0.85; }
+        .record-duration { font-weight: 500; white-space: nowrap; }
+
         .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: var(--md-error); transition: background 0.3s; }
         .status-dot.connected { background: #146c2e; } /* Green color for connected state */
     </style>
@@ -237,22 +286,54 @@ class ServerService : Service() {
 
         <div id="authSection" class="card">
             <h2>Authentication required</h2>
-            <p style="margin: 0; color: var(--md-outline);">Enter the Auth Token displayed in the Companion App.</p>
+            <p style="margin: 0; color: var(--md-outline);">Enter the Auth PIN displayed in the Companion App.</p>
             <div class="input-group">
-                <input type="text" id="tokenInput" placeholder="Auth Token" autocomplete="off">
+                <input type="text" id="tokenInput" placeholder="4-digit PIN" inputmode="numeric" maxlength="4" autocomplete="off">
                 <button onclick="saveToken()">Connect</button>
             </div>
         </div>
 
         <div id="appSection">
-            <div class="card">
-                <h2>Running</h2>
-                <div id="runningList" style="color: var(--md-outline);">Loading...</div>
+            <div class="tabs">
+                <button class="tab active" id="tab-track" onclick="showTab('track')">Track</button>
+                <button class="tab" id="tab-records" onclick="showTab('records')">Records</button>
+                <button class="tab" id="tab-stats" onclick="showTab('stats')">Statistics</button>
             </div>
 
-            <div class="card">
-                <h2>Activities</h2>
-                <div id="activitiesList" style="color: var(--md-outline);">Loading...</div>
+            <div id="page-track">
+                <div class="card">
+                    <h2>Running</h2>
+                    <div id="runningList" style="color: var(--md-outline);">Loading...</div>
+                </div>
+
+                <div class="card">
+                    <h2>Activities</h2>
+                    <div id="activitiesList" style="color: var(--md-outline);">Loading...</div>
+                </div>
+            </div>
+
+            <div id="page-day" style="display: none;">
+                <div class="date-nav">
+                    <button class="btn-tonal" onclick="changeShift(-1)">&lt;</button>
+                    <span class="date-label" id="dateLabel">Today</span>
+                    <button class="btn-tonal" onclick="changeShift(1)">&gt;</button>
+                </div>
+
+                <div id="page-records" style="display: none;">
+                    <div id="recordsList" style="color: var(--md-outline);">Loading...</div>
+                </div>
+
+                <div id="page-stats" style="display: none;">
+                    <select class="filter-select" id="filterType" onchange="fetchDay(true)">
+                        <option value="ACTIVITY">Activity</option>
+                        <option value="CATEGORY">Category</option>
+                        <option value="RECORD_TAG">Tag</option>
+                    </select>
+                    <div class="card">
+                        <div id="statsChart"></div>
+                        <div id="statsList" style="color: var(--md-outline);">Loading...</div>
+                    </div>
+                </div>
             </div>
             
             <div style="text-align: center;">
@@ -268,6 +349,8 @@ class ServerService : Service() {
         let clockSkew = 0;
         let eventSource = null;
         let clockInterval = null;
+        let currentTab = 'track';
+        let currentShift = 0;
         
         if (token) {
             document.getElementById('appSection').style.display = 'block';
@@ -316,6 +399,7 @@ class ServerService : Service() {
             eventSource.onmessage = (e) => {
                 if(e.data === 'update') {
                     fetchData();
+                    if (currentTab !== 'track') fetchDay();
                 }
             };
         }
@@ -345,16 +429,7 @@ class ServerService : Service() {
                 const activities = await actRes.json();
                 
                 activitiesMap = {};
-                let actHtml = '';
-                activities.forEach(a => {
-                    activitiesMap[a.id] = a;
-                    let hex = (a.color & 0xFFFFFF).toString(16).padStart(6, '0');
-                    actHtml += '<div class="list-item">' +
-                        '<span class="activity-name"><span class="color-dot" style="background:#' + hex + '"></span>' + a.name + '</span>' +
-                        '<button onclick="startActivity(\'' + a.name + '\')">Start</button>' +
-                    '</div>';
-                });
-                document.getElementById('activitiesList').innerHTML = actHtml || 'No activities found.';
+                activities.forEach(a => { activitiesMap[a.id] = a; });
 
                 const runRes = await api('/running');
                 const serverTimeStr = runRes.headers.get("X-Server-Time");
@@ -364,6 +439,18 @@ class ServerService : Service() {
                 
                 const running = await runRes.json();
                 runningTimers = running;
+
+                // Running activities are shown in the running section only, until stopped.
+                const runningIds = new Set(running.map(r => r.id));
+                let actHtml = '';
+                activities.filter(a => !runningIds.has(a.id)).forEach(a => {
+                    let hex = (a.color & 0xFFFFFF).toString(16).padStart(6, '0');
+                    actHtml += '<div class="list-item">' +
+                        '<span class="activity-name"><span class="color-dot" style="background:#' + hex + '"></span>' + a.name + '</span>' +
+                        '<button onclick="startActivity(\'' + a.name + '\')">Start</button>' +
+                    '</div>';
+                });
+                document.getElementById('activitiesList').innerHTML = actHtml || 'No activities to start.';
                 
                 let runHtml = '';
                 running.forEach(r => {
@@ -378,6 +465,158 @@ class ServerService : Service() {
                 updateClocks();
             } catch (e) {
                 console.error(e);
+            }
+        }
+
+        function showTab(tab) {
+            currentTab = tab;
+            ['track', 'records', 'stats'].forEach(t => {
+                document.getElementById('tab-' + t).classList.toggle('active', t === tab);
+            });
+            const isDay = tab !== 'track';
+            document.getElementById('page-track').style.display = isDay ? 'none' : 'block';
+            document.getElementById('page-day').style.display = isDay ? 'block' : 'none';
+            document.getElementById('page-records').style.display = tab === 'records' ? 'block' : 'none';
+            document.getElementById('page-stats').style.display = tab === 'stats' ? 'block' : 'none';
+            if (isDay) fetchDay(true);
+        }
+
+        function changeShift(delta) {
+            currentShift += delta;
+            fetchDay(true);
+        }
+
+        function showLoading() {
+            const loading = '<div class="loading">Loading...</div>';
+            if (currentTab === 'records') {
+                document.getElementById('recordsList').innerHTML = loading;
+            } else if (currentTab === 'stats') {
+                document.getElementById('statsChart').innerHTML = '';
+                document.getElementById('statsList').innerHTML = loading;
+            }
+        }
+
+        function updateDateLabel() {
+            let text;
+            if (currentShift === 0) text = 'Today';
+            else if (currentShift === -1) text = 'Yesterday';
+            else if (currentShift === 1) text = 'Tomorrow';
+            else {
+                const d = new Date();
+                d.setDate(d.getDate() + currentShift);
+                text = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            }
+            document.getElementById('dateLabel').innerText = text;
+        }
+
+        function fetchDay(withLoading) {
+            updateDateLabel();
+            if (withLoading) showLoading();
+            if (currentTab === 'records') return fetchRecords();
+            if (currentTab === 'stats') return fetchStatistics();
+        }
+
+        function esc(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
+        function colorHex(color) {
+            return '#' + ((color || 0) & 0xFFFFFF).toString(16).padStart(6, '0');
+        }
+
+        // Icons are either an emoji or an internal resource name (ic_...), only the former can be shown.
+        function iconHtml(icon) {
+            if (!icon || /^[a-z0-9_]+${'$'}/i.test(icon)) return '';
+            return '<span style="font-size: 20px;">' + esc(icon) + '</span>';
+        }
+
+        function formatDuration(ms) {
+            const totalMin = Math.floor(ms / 60000);
+            const h = Math.floor(totalMin / 60);
+            const m = totalMin % 60;
+            return h > 0 ? h + 'h ' + m + 'm' : m + 'm';
+        }
+
+        function formatTime(ts) {
+            const d = new Date(ts);
+            return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+        }
+
+        async function fetchRecords() {
+            const shift = currentShift;
+            try {
+                const res = await api('/records?shift=' + shift);
+                const records = await res.json();
+                if (shift !== currentShift || currentTab !== 'records') return;
+                let html = '';
+                records.forEach(r => {
+                    const untracked = r.type === 'UNTRACKED';
+                    const running = r.type === 'RUNNING';
+                    const name = untracked ? 'Untracked' : (r.activityName || 'Unknown');
+                    const duration = (running ? Date.now() : r.endedAt) - r.startedAt;
+                    const tags = (r.tags || []).map(t => {
+                        return t.name + (t.numericValue != null ? ' ' + t.numericValue + (t.valueSuffix || '') : '');
+                    }).join(', ');
+                    html += '<div class="record-row' + (untracked ? ' untracked' : '') + '" style="background:' + colorHex(r.activityColor) + '">' +
+                        iconHtml(r.activityIcon) +
+                        '<div class="record-main">' +
+                            '<div class="record-name">' + esc(name) + '</div>' +
+                            '<div class="record-sub">' + formatTime(r.startedAt) + ' - ' + (running ? 'now' : formatTime(r.endedAt)) +
+                                (tags ? ' · ' + esc(tags) : '') + '</div>' +
+                        '</div>' +
+                        '<div class="record-duration">' + formatDuration(duration) + '</div>' +
+                    '</div>';
+                });
+                document.getElementById('recordsList').innerHTML = html || 'No records for this day.';
+            } catch (e) {
+                console.error(e);
+                document.getElementById('recordsList').innerText = 'Could not load records.';
+            }
+        }
+
+        async function fetchStatistics() {
+            const shift = currentShift;
+            try {
+                const filter = document.getElementById('filterType').value;
+                const res = await api('/statistics?shift=' + shift + '&filter=' + filter);
+                const stats = (await res.json()).filter(s => s.duration > 0 || s.type !== 'UNTRACKED');
+                if (shift !== currentShift || currentTab !== 'stats') return;
+                stats.sort((a, b) => b.duration - a.duration);
+
+                const sum = stats.reduce((acc, s) => acc + s.duration, 0);
+                const tracked = stats.filter(s => s.type !== 'UNTRACKED').reduce((acc, s) => acc + s.duration, 0);
+                const colorOf = s => (s.type === 'UNTRACKED' || s.color == null) ? '#5f6368' : colorHex(s.color);
+
+                let chartHtml = '';
+                let listHtml = '';
+                if (sum > 0) {
+                    let acc = 0;
+                    const slices = stats.filter(s => s.duration > 0).map(s => {
+                        const start = acc / sum * 100;
+                        acc += s.duration;
+                        return colorOf(s) + ' ' + start + '% ' + (acc / sum * 100) + '%';
+                    });
+                    chartHtml = '<div class="donut-chart" style="background: conic-gradient(' + slices.join(', ') + ')"><div class="donut-inner"></div></div>';
+                }
+                stats.forEach(s => {
+                    const pct = sum > 0 ? s.duration / sum * 100 : 0;
+                    const pctText = pct > 0 && pct < 1 ? '<1%' : Math.round(pct) + '%';
+                    const name = s.type === 'UNTRACKED' ? 'Untracked' : (s.name || 'Unknown');
+                    listHtml += '<div class="stat-row" style="background:' + colorOf(s) + '">' +
+                        iconHtml(s.icon) +
+                        '<span class="stat-name">' + esc(name) + '</span>' +
+                        '<span>' + formatDuration(s.duration) + '</span>' +
+                        '<span class="stat-percent">' + pctText + '</span>' +
+                    '</div>';
+                });
+                if (listHtml) {
+                    listHtml += '<div class="stat-total"><span>Total tracked</span><span>' + formatDuration(tracked) + '</span></div>';
+                }
+                document.getElementById('statsChart').innerHTML = chartHtml;
+                document.getElementById('statsList').innerHTML = listHtml || 'No data for this day.';
+            } catch (e) {
+                console.error(e);
+                document.getElementById('statsList').innerText = 'Could not load statistics.';
             }
         }
 

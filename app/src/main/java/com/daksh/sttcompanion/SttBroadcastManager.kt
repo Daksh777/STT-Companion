@@ -18,12 +18,18 @@ class SttBroadcastManager(private val context: Context) {
     private val ACTION_QUERY_RUNNING = "com.razeeman.util.simpletimetracker.ACTION_QUERY_RUNNING"
     private val ACTION_RESPONSE_ACTIVITIES = "com.razeeman.util.simpletimetracker.ACTION_RESPONSE_ACTIVITIES"
     private val ACTION_RESPONSE_RUNNING = "com.razeeman.util.simpletimetracker.ACTION_RESPONSE_RUNNING"
+    private val ACTION_QUERY_RECORDS = "com.razeeman.util.simpletimetracker.ACTION_QUERY_RECORDS"
+    private val ACTION_QUERY_STATISTICS = "com.razeeman.util.simpletimetracker.ACTION_QUERY_STATISTICS"
+    private val ACTION_RESPONSE_RECORDS = "com.razeeman.util.simpletimetracker.ACTION_RESPONSE_RECORDS"
+    private val ACTION_RESPONSE_STATISTICS = "com.razeeman.util.simpletimetracker.ACTION_RESPONSE_STATISTICS"
     private val ACTION_START_ACTIVITY = "com.razeeman.util.simpletimetracker.ACTION_START_ACTIVITY"
     private val ACTION_STOP_ACTIVITY = "com.razeeman.util.simpletimetracker.ACTION_STOP_ACTIVITY"
 
     private val EXTRA_ANSWER_TYPE = "extra_answer_type"
     private val EXTRA_DATA = "data"
     private val EXTRA_ACTIVITY_NAME = "extra_activity_name"
+    private val EXTRA_SHIFT = "extra_shift"
+    private val EXTRA_FILTER_TYPE = "extra_filter_type"
     
     private val TARGET_PACKAGE = "com.razeeman.util.simpletimetracker.debug"
     
@@ -102,6 +108,56 @@ class SttBroadcastManager(private val context: Context) {
             withTimeoutOrNull(2000L) { deferred.await() }
         } catch (e: Exception) {
             Log.e("SttBroadcast", "Error fetching running", e)
+            null
+        } finally {
+            context.unregisterReceiver(receiver)
+        }
+    }
+
+    /** Full activity records of a single day. [shift] is days from today, 0 - today, -1 - yesterday. */
+    suspend fun getRecords(shift: Int = 0): String? {
+        return query(
+            queryAction = ACTION_QUERY_RECORDS,
+            responseAction = ACTION_RESPONSE_RECORDS,
+            extras = { putExtra(EXTRA_SHIFT, shift) },
+        )
+    }
+
+    /** Statistics of a single day. [filterType] is one of ACTIVITY, CATEGORY, RECORD_TAG. */
+    suspend fun getStatistics(shift: Int = 0, filterType: String = "ACTIVITY"): String? {
+        return query(
+            queryAction = ACTION_QUERY_STATISTICS,
+            responseAction = ACTION_RESPONSE_STATISTICS,
+            extras = {
+                putExtra(EXTRA_SHIFT, shift)
+                putExtra(EXTRA_FILTER_TYPE, filterType)
+            },
+        )
+    }
+
+    private suspend fun query(
+        queryAction: String,
+        responseAction: String,
+        extras: Intent.() -> Unit,
+    ): String? {
+        val deferred = CompletableDeferred<String?>()
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == responseAction) {
+                    deferred.complete(intent.getStringExtra(EXTRA_DATA))
+                }
+            }
+        }
+        ContextCompat.registerReceiver(context, receiver, IntentFilter(responseAction), ContextCompat.RECEIVER_EXPORTED)
+        val queryIntent = Intent(queryAction).apply {
+            setPackage(TARGET_PACKAGE)
+            extras()
+        }
+        context.sendBroadcast(queryIntent)
+        return try {
+            withTimeoutOrNull(3000L) { deferred.await() }
+        } catch (e: Exception) {
+            Log.e("SttBroadcast", "Error running query $queryAction", e)
             null
         } finally {
             context.unregisterReceiver(receiver)
