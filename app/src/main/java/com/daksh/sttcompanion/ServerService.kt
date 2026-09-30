@@ -259,6 +259,8 @@ class ServerService : Service() {
         .date-label { font-size: 18px; font-weight: 500; }
         .filter-select { width: 100%; padding: 12px; margin-bottom: 16px; border-radius: 16px; border: 1px solid var(--md-outline-variant); background: var(--md-surface); color: var(--md-on-bg); font-size: 14px; }
 
+        .note { margin: -12px 8px 24px; font-size: 12px; text-align: center; color: var(--md-outline); }
+
         .loading { text-align: center; padding: 32px 0; color: var(--md-outline); }
 
         .donut-chart { width: 220px; height: 220px; border-radius: 50%; margin: 8px auto 24px; position: relative; }
@@ -310,6 +312,7 @@ class ServerService : Service() {
                     <h2>Activities</h2>
                     <div id="activitiesList" style="color: var(--md-outline);">Loading...</div>
                 </div>
+                <p class="note">New or renamed activities can take up to a minute to appear. Reload the page to see them right away.</p>
             </div>
 
             <div id="page-day" style="display: none;">
@@ -349,6 +352,12 @@ class ServerService : Service() {
         let clockSkew = 0;
         let eventSource = null;
         let clockInterval = null;
+        let activitiesCache = null;
+        let activitiesFetchedAt = 0;
+        const ACTIVITIES_TTL_MS = 60000;
+        let lastActionAt = 0;
+        let pollInterval = null;
+        const POLL_INTERVAL_MS = 5000;
         let currentTab = 'track';
         let currentShift = 0;
         
@@ -357,6 +366,7 @@ class ServerService : Service() {
             fetchData();
             setupSSE();
             startLocalClock();
+            startPolling();
         } else {
             document.getElementById('authSection').style.display = 'block';
         }
@@ -424,48 +434,71 @@ class ServerService : Service() {
         }
 
         async function fetchData() {
+            const startedAt = Date.now();
             try {
-                const actRes = await api('/activities');
-                const activities = await actRes.json();
-                
-                activitiesMap = {};
-                activities.forEach(a => { activitiesMap[a.id] = a; });
-
-                const runRes = await api('/running');
+                // Activities rarely change and are independent from running timers,
+                // so they are cached and loaded in parallel with running.
+                const needActivities = !activitiesCache || Date.now() - activitiesFetchedAt > ACTIVITIES_TTL_MS;
+                const [activities, runRes] = await Promise.all([
+                    needActivities ? api('/activities').then(res => res.json()) : Promise.resolve(activitiesCache),
+                    api('/running'),
+                ]);
+                if (needActivities) {
+                    activitiesCache = activities;
+                    activitiesFetchedAt = Date.now();
+                }
                 const serverTimeStr = runRes.headers.get("X-Server-Time");
                 if (serverTimeStr) {
                     clockSkew = parseInt(serverTimeStr) - Date.now();
                 }
-                
                 const running = await runRes.json();
-                runningTimers = running;
-
-                // Running activities are shown in the running section only, until stopped.
-                const runningIds = new Set(running.map(r => r.id));
-                let actHtml = '';
-                activities.filter(a => !runningIds.has(a.id)).forEach(a => {
-                    let hex = (a.color & 0xFFFFFF).toString(16).padStart(6, '0');
-                    actHtml += '<div class="list-item">' +
-                        '<span class="activity-name"><span class="color-dot" style="background:#' + hex + '"></span>' + a.name + '</span>' +
-                        '<button onclick="startActivity(\'' + a.name + '\')">Start</button>' +
-                    '</div>';
-                });
-                document.getElementById('activitiesList').innerHTML = actHtml || 'No activities to start.';
-                
-                let runHtml = '';
-                running.forEach(r => {
-                    const act = activitiesMap[r.id] || { name: 'Unknown', color: 0 };
-                    let hex = (act.color & 0xFFFFFF).toString(16).padStart(6, '0');
-                    runHtml += '<div class="list-item">' +
-                        '<span class="activity-name"><span class="color-dot" style="background:#' + hex + '"></span>' + act.name + ' <span class="timer" id="timer-' + r.id + '">00:00:00</span></span>' +
-                        '<button class="btn-stop" onclick="stopActivity(\'' + act.name + '\')">Stop</button>' +
-                    '</div>';
-                });
-                document.getElementById('runningList').innerHTML = runHtml || 'Nothing running right now.';
-                updateClocks();
+                // Drop results that were requested before a local start/stop, they are outdated.
+                if (startedAt < lastActionAt) return;
+                renderTrack(activities, running);
             } catch (e) {
                 console.error(e);
             }
+        }
+
+        function renderTrack(activities, running) {
+            activitiesMap = {};
+            activities.forEach(a => { activitiesMap[a.id] = a; });
+            runningTimers = running;
+
+            // Running activities are shown in the running section only, until stopped.
+            const runningIds = new Set(running.map(r => r.id));
+            let actHtml = '';
+            activities.filter(a => !runningIds.has(a.id)).forEach(a => {
+                let hex = (a.color & 0xFFFFFF).toString(16).padStart(6, '0');
+                actHtml += '<div class="list-item">' +
+                    '<span class="activity-name"><span class="color-dot" style="background:#' + hex + '"></span>' + a.name + '</span>' +
+                    '<button onclick="startActivity(\'' + a.name + '\')">Start</button>' +
+                '</div>';
+            });
+            document.getElementById('activitiesList').innerHTML = actHtml || 'No activities to start.';
+
+            let runHtml = '';
+            running.forEach(r => {
+                const act = activitiesMap[r.id] || { name: 'Unknown', color: 0 };
+                let hex = (act.color & 0xFFFFFF).toString(16).padStart(6, '0');
+                runHtml += '<div class="list-item">' +
+                    '<span class="activity-name"><span class="color-dot" style="background:#' + hex + '"></span>' + act.name + ' <span class="timer" id="timer-' + r.id + '">00:00:00</span></span>' +
+                    '<button class="btn-stop" onclick="stopActivity(\'' + act.name + '\')">Stop</button>' +
+                '</div>';
+            });
+            document.getElementById('runningList').innerHTML = runHtml || 'Nothing running right now.';
+            updateClocks();
+        }
+
+        // Running records can be edited in the app without any event, so refresh them periodically.
+        function startPolling() {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(() => {
+                if (!document.hidden && currentTab === 'track' && Date.now() - lastActionAt > 3000) fetchData();
+            }, POLL_INTERVAL_MS);
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) fetchData();
+            });
         }
 
         function showTab(tab) {
@@ -620,12 +653,34 @@ class ServerService : Service() {
             }
         }
 
+        // Updates the lists right away, real state arrives with the next event.
+        function applyLocal(name, start) {
+            const act = Object.values(activitiesMap).find(a => a.name === name);
+            if (!act || !activitiesCache) return;
+            lastActionAt = Date.now();
+            let running = runningTimers.filter(r => r.id !== act.id);
+            if (start) running = running.concat([{ id: act.id, startedAt: Date.now() + clockSkew, tags: [] }]);
+            renderTrack(activitiesCache, running);
+        }
+
         async function startActivity(name) {
-            await api('/start?name=' + encodeURIComponent(name), { method: 'POST' });
+            applyLocal(name, true);
+            try {
+                await api('/start?name=' + encodeURIComponent(name), { method: 'POST' });
+            } catch (e) {
+                lastActionAt = 0;
+                fetchData();
+            }
         }
 
         async function stopActivity(name) {
-            await api('/stop?name=' + encodeURIComponent(name), { method: 'POST' });
+            applyLocal(name, false);
+            try {
+                await api('/stop?name=' + encodeURIComponent(name), { method: 'POST' });
+            } catch (e) {
+                lastActionAt = 0;
+                fetchData();
+            }
         }
     </script>
 </body>
